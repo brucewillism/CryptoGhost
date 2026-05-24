@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Run secret scanner
+        run: python scripts/scan_secrets.py --strict
+
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cryptoghost
+          POSTGRES_PASSWORD: cryptoghost
+          POSTGRES_DB: cryptoghost_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cryptoghost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        env:
+          CRYPTOGHOST_ENV: test
+          CRYPTOGHOST_SECRET_KEY: test-secret-key-min-32-characters-long
+          CRYPTOGHOST_JWT_SECRET: test-jwt-secret-min-32-characters-long
+          CRYPTOGHOST_DATABASE_URL: postgresql+asyncpg://cryptoghost:cryptoghost@localhost:5432/cryptoghost_test
+          CRYPTOGHOST_DATABASE_URL_SYNC: postgresql://cryptoghost:cryptoghost@localhost:5432/cryptoghost_test
+          CRYPTOGHOST_REDIS_URL: redis://localhost:6379/0
+          CRYPTOGHOST_CELERY_BROKER_URL: redis://localhost:6379/1
+          CRYPTOGHOST_CELERY_RESULT_BACKEND: redis://localhost:6379/2
+          CRYPTOGHOST_PAPER_TRADING: "true"
+          CRYPTOGHOST_LIVE_TRADING_ENABLED: "false"
+          CRYPTOGHOST_FINBERT_ENABLED: "false"
+          CRYPTOGHOST_ADMIN_USERNAME: testuser
+          CRYPTOGHOST_ADMIN_PASSWORD: test-password
+        run: pytest tests/ -v --cov=backend --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  backend-lint:
+    name: Backend Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install lint tools
+        run: pip install -r requirements-dev.txt
+      - name: flake8
+        run: flake8 backend/ tests/ scripts/ --count --statistics
+        continue-on-error: true
+      - name: isort check
+        run: isort backend/ tests/ scripts/ --check-only --diff
+        continue-on-error: true
+      - name: black check
+        run: black backend/ tests/ scripts/ --check --diff
+        continue-on-error: true
+      - name: mypy
+        run: mypy backend/shared/ backend/api/ --ignore-missing-imports
+        continue-on-error: true
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/dashboard/package-lock.json
+      - name: Install & build
+        working-directory: frontend/dashboard
+        run: |
+          npm ci || npm install
+          npm run build
+
+  docker-validate:
+    name: Docker Compose Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose files
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.dev.yml config --quiet

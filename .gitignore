@@ -1,0 +1,132 @@
+# ============================================================
+# CryptoGhost — Git Ignore (release-safe)
+# ============================================================
+
+# --- Secrets & credentials (NEVER commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+*.credentials
+.secrets
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# --- Testing & coverage ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+.nox/
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dashboard/dist/
+frontend/dashboard/.vite/
+frontend/dashboard/node_modules/
+*.tsbuildinfo
+.npm
+.yarn/
+.pnp.*
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+temp/
+cache/
+.cache/
+*.pid
+*.seed
+
+# --- IDE & editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# --- Docker runtime data ---
+docker/volumes/
+grafana-storage/
+prometheus-storage/
+
+# --- ML models & heavy artifacts ---
+models/*.h5
+models/*.pt
+models/*.pkl
+models/*.onnx
+models/*.safetensors
+models/checkpoints/
+!models/.gitkeep
+
+# --- Data lake & raw datasets ---
+data/lake/
+data/raw/
+datasets/raw/
+datasets/*.csv
+datasets/*.parquet
+datasets/*.feather
+!datasets/.gitkeep
+!datasets/README.md
+
+# --- Database files ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+notebooks/outputs/
+!notebooks/.gitkeep
+
+# --- Backups ---
+backups/*.sql
+backups/*.dump
+backups/*.gz
+!backups/.gitkeep
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Build artifacts ---
+*.tar.gz
+*.zip
+*.7z

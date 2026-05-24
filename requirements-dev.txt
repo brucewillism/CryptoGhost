@@ -1,0 +1,9 @@
+# CryptoGhost — Development & Quality Tools
+# pip install -r requirements-dev.txt
+
+black==24.4.2
+isort==5.13.2
+flake8==7.0.0
+mypy==1.10.0
+ruff==0.4.4
+pre-commit==3.7.1

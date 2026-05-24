@@ -1,0 +1,66 @@
+[project]
+name = "cryptoghost"
+version = "5.0.0"
+description = "Self-Improving Institutional Quantitative AI Platform"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.venv
+  | node_modules
+  | alembic/versions
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip = [".venv", "node_modules", "alembic/versions"]
+known_first_party = ["backend"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = false
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["alembic/versions", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["backend"]
+omit = ["*/alembic/*", "*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E501", "W503", "E203"]
+exclude = [".venv", "node_modules", "alembic/versions"]
+per-file-ignores = ["__init__.py:F401"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "node_modules", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

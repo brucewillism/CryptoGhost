@@ -1,0 +1,1 @@
+"""CryptoGhost API routes."""

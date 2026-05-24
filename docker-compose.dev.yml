@@ -1,0 +1,178 @@
+# CryptoGhost v5 - Docker Compose Development
+# Hot reload, volumes, logs detalhados, Ollama REMOTO (sem container local)
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cryptoghost-dev-postgres
+    environment:
+      POSTGRES_USER: cryptoghost
+      POSTGRES_PASSWORD: cryptoghost
+      POSTGRES_DB: cryptoghost
+    volumes:
+      - cryptoghost_dev_pg_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cryptoghost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cryptoghost-dev-redis
+    command: redis-server --appendonly yes --loglevel verbose
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cryptoghost-dev-backend
+    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    env_file:
+      - .env
+    environment:
+      CRYPTOGHOST_ENV: development
+      CRYPTOGHOST_DEBUG: "true"
+      CRYPTOGHOST_DATABASE_URL: postgresql+asyncpg://cryptoghost:cryptoghost@postgres:5432/cryptoghost
+      CRYPTOGHOST_DATABASE_URL_SYNC: postgresql://cryptoghost:cryptoghost@postgres:5432/cryptoghost
+      CRYPTOGHOST_REDIS_URL: redis://redis:6379/0
+      CRYPTOGHOST_CELERY_BROKER_URL: redis://redis:6379/1
+      CRYPTOGHOST_CELERY_RESULT_BACKEND: redis://redis:6379/2
+      PYTHONPATH: /app
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - cryptoghost_dev_models:/app/models
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cryptoghost-dev-celery
+    command: celery -A backend.shared.celery_app worker --loglevel=debug -Q celery,intelligence -c 2
+    env_file:
+      - .env
+    environment:
+      CRYPTOGHOST_ENV: development
+      CRYPTOGHOST_DEBUG: "true"
+      CRYPTOGHOST_DATABASE_URL: postgresql+asyncpg://cryptoghost:cryptoghost@postgres:5432/cryptoghost
+      CRYPTOGHOST_DATABASE_URL_SYNC: postgresql://cryptoghost:cryptoghost@postgres:5432/cryptoghost
+      CRYPTOGHOST_REDIS_URL: redis://redis:6379/0
+      CRYPTOGHOST_CELERY_BROKER_URL: redis://redis:6379/1
+      CRYPTOGHOST_CELERY_RESULT_BACKEND: redis://redis:6379/2
+      PYTHONPATH: /app
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+      - cryptoghost_dev_models:/app/models
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cryptoghost-dev-celery-beat
+    command: celery -A backend.shared.celery_app beat --loglevel=debug
+    env_file:
+      - .env
+    environment:
+      CRYPTOGHOST_CELERY_BROKER_URL: redis://redis:6379/1
+      PYTHONPATH: /app
+    depends_on:
+      - celery-worker
+    volumes:
+      - ./backend:/app/backend
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  frontend:
+    image: node:20-alpine
+    container_name: cryptoghost-dev-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/dashboard:/app
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: cryptoghost-dev-prometheus
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: cryptoghost-dev-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: cryptoghost
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_LOG_LEVEL: debug
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - cryptoghost_dev_grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - cryptoghost-dev-net
+    restart: unless-stopped
+
+volumes:
+  cryptoghost_dev_pg_data:
+  cryptoghost_dev_grafana_data:
+  cryptoghost_dev_models:
+
+networks:
+  cryptoghost-dev-net:
+    driver: bridge

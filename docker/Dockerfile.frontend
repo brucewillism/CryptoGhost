@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+LABEL org.opencontainers.image.title="CryptoGhost Frontend"
+LABEL org.opencontainers.image.description="CryptoGhost Trading Bot - Dashboard"
+
+WORKDIR /app
+
+COPY frontend/dashboard/package*.json ./
+RUN npm install
+
+COPY frontend/dashboard ./
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
