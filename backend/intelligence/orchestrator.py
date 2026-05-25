@@ -201,7 +201,63 @@ class IntelligenceOrchestrator:
             logger.warning("self_improving_pipeline_failed", error=str(exc))
             result["self_improving_v5"] = {"status": "unavailable", "error": str(exc)}
 
-        self.stream.publish_sync("intelligence_update", {"symbol": symbol, "consensus": result["consensus"], "analysis": result["analysis"]})
+        try:
+            from backend.shared.config import get_settings
+            settings = get_settings()
+            if settings.v6_enabled and settings.consensus_v3_enabled:
+                from backend.app.ai.consensus_v3.engine import ConsensusEngineV3
+                from backend.app.ai.regime.service import RegimeDetectionService
+                from backend.app.auto_invest.signal_freshness import SignalFreshnessValidator
+
+                regime_svc = RegimeDetectionService()
+                regime_enum, policy, _ = await regime_svc.detect_and_persist(session, symbol, df)
+                c3_engine = ConsensusEngineV3()
+                weights = await c3_engine.performance.compute_weights(session, symbol, regime_enum.value)
+                calibrated = result.get("quant_v3", {}).get("calibration", {}).get("calibrated_confidence", consensus.confidence)
+                c3 = c3_engine.build_from_votes(
+                    symbol, votes,
+                    calibrated_confidence=float(calibrated or 0.5),
+                    technical_score=float(analysis.score),
+                    sentiment_score=float(sentiment.score),
+                    regime=regime_enum,
+                    policy=policy,
+                    agent_weights=weights,
+                )
+                result["consensus_v3"] = ConsensusEngineV3.to_dict(c3)
+                result["consensus"] = {
+                    "final_decision": c3.final_decision,
+                    "confidence": c3.consensus,
+                    "agreement": c3.agreement,
+                    "disagreement": c3.disagreement,
+                    "conflicts": c3.conflicts,
+                    "agent_votes": result["consensus_v3"]["agent_votes"],
+                    "final_score": c3.final_score,
+                    "classification": c3.classification.value,
+                    "can_execute": c3.can_execute,
+                }
+                await SignalFreshnessValidator().persist_signal(session, c3, regime_enum.value)
+
+                from backend.app.ai.quant_models.ensemble import QuantEnsemble
+                from backend.app.features.calculators.technical import compute_all_features
+                feat = compute_all_features(df)
+                result["quant_ml"] = __import__("dataclasses").asdict(
+                    QuantEnsemble().predict(df, feat)
+                )
+        except Exception as exc:
+            logger.warning("consensus_v3_failed", error=str(exc))
+            result["consensus_v3"] = {"status": "unavailable", "error": str(exc)}
+
+        try:
+            self.stream.publish_sync(
+                "intelligence_update",
+                {"symbol": symbol, "consensus": result["consensus"], "analysis": result["analysis"]},
+            )
+            from backend.api.websocket import broadcast_intelligence_update, broadcast_consensus_update
+            await broadcast_intelligence_update({"symbol": symbol, "consensus": result.get("consensus"), "analysis": result.get("analysis")})
+            await broadcast_consensus_update({"symbol": symbol, "consensus": result.get("consensus"), "consensus_v3": result.get("consensus_v3")})
+        except Exception as exc:
+            logger.warning("stream_publish_failed", error=str(exc))
+
         logger.info("intelligence_complete", symbol=symbol, decision=consensus.final_decision, elapsed_ms=result["elapsed_ms"])
         return result
 
@@ -226,7 +282,10 @@ class IntelligenceOrchestrator:
             "macro": {"outlook": macro.market_outlook, "summary": macro.summary, "indicators": [asdict(i) for i in macro.indicators]},
             "news": [{"title": n.title, "impact": n.impact, "direction": n.direction, "confidence": n.confidence} for n in news_items[:5]],
         }
-        self.stream.publish_sync("macro_news_update", result)
+        try:
+            self.stream.publish_sync("macro_news_update", result)
+        except Exception as exc:
+            logger.warning("stream_publish_failed", error=str(exc))
         return result
 
     async def get_market_heatmap(self, symbols: list[str]) -> list[dict]:

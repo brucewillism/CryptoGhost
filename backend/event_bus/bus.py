@@ -46,7 +46,9 @@ class EventBus:
     def publish_sync(self, event_type: EventType | str, payload: dict[str, Any]) -> str:
         import json
 
-        client = sync_redis.from_url(self._redis_url, decode_responses=True)
+        client = sync_redis.from_url(
+            self._redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2,
+        )
         event_id = str(uuid4())
         etype = event_type.value if isinstance(event_type, EventType) else event_type
         stream = f"{STREAM_PREFIX}:{etype}"
@@ -60,19 +62,24 @@ class EventBus:
             )
             client.publish(PUBSUB_CHANNEL, json.dumps({"event_id": event_id, "type": etype}))
             self._dispatch_sync(etype, {"event_id": event_id, "type": etype, "payload": payload})
+            from backend.shared.live_events import append_event
+            append_event(etype, payload, event_id)
             logger.debug("event_published", event_type=etype, event_id=event_id)
             return event_id
         except Exception as exc:
+            from backend.shared.live_events import append_event
+            append_event(etype, payload, event_id)
             logger.error("event_publish_failed", error=str(exc))
-            client.xadd(DLQ_STREAM, {"event_id": event_id, "type": etype, "error": str(exc)})
-            raise
+            return event_id
         finally:
             client.close()
 
     async def publish(self, event_type: EventType | str, payload: dict[str, Any]) -> str:
         import json
 
-        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        client = aioredis.from_url(
+            self._redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2,
+        )
         event_id = str(uuid4())
         etype = event_type.value if isinstance(event_type, EventType) else event_type
         stream = f"{STREAM_PREFIX}:{etype}"
@@ -99,7 +106,9 @@ class EventBus:
     def consume_with_retry(self, event_type: EventType, handler: Callable[[dict], bool]) -> int:
         import json
 
-        client = sync_redis.from_url(self._redis_url, decode_responses=True)
+        client = sync_redis.from_url(
+            self._redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2,
+        )
         stream = f"{STREAM_PREFIX}:{event_type.value}"
         group = "cryptoghost_consumers"
         consumer = f"worker-{uuid4().hex[:8]}"

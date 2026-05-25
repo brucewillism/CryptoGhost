@@ -19,8 +19,17 @@ celery_app = Celery(
         "backend.quant.tasks",
         "backend.investment.tasks",
         "backend.self_improving.tasks",
+        "backend.app.workers.tasks",
     ],
 )
+
+celery_app.conf.task_routes = {
+    "backend.app.workers.run_market_scan": {"queue": "market_scan"},
+    "backend.app.workers.run_auto_invest_v2": {"queue": "analysis"},
+    "backend.app.workers.run_backtest": {"queue": "backtesting"},
+    "backend.app.workers.run_self_improving_v6": {"queue": "retraining"},
+    "backend.intelligence.tasks.*": {"queue": "analysis"},
+}
 
 celery_app.conf.update(
     task_serializer="json",
@@ -63,6 +72,21 @@ celery_app.conf.update(
         "self-improvement-cycle": {
             "task": "backend.self_improving.tasks.run_self_improvement_cycle",
             "schedule": 600.0,
+        },
+        "v6-market-scan": {
+            "task": "backend.app.workers.run_market_scan",
+            "schedule": 300.0,
+            "options": {"queue": "market_scan"},
+        },
+        "v6-auto-invest": {
+            "task": "backend.app.workers.run_auto_invest_v2",
+            "schedule": float(settings.auto_invest_interval_minutes * 60),
+            "options": {"queue": "analysis"},
+        },
+        "v6-self-improving": {
+            "task": "backend.app.workers.run_self_improving_v6",
+            "schedule": 900.0,
+            "options": {"queue": "retraining"},
         },
     },
 )

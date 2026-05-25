@@ -1,5 +1,7 @@
 """CryptoGhost - API de Inteligência Financeira."""
 
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,9 +23,9 @@ from backend.shared.security import get_current_user
 router = APIRouter(prefix="/intelligence", tags=["Inteligência Financeira"])
 
 
-@router.post("/analyze/{symbol}")
+@router.post("/analyze")
 async def analyze_symbol(
-    symbol: str,
+    symbol: str = Query(..., description="Par de trading, ex: BTC/USDT"),
     session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
@@ -32,9 +34,9 @@ async def analyze_symbol(
     return await orchestrator.analyze_symbol(session, symbol)
 
 
-@router.get("/analysis/{symbol}")
+@router.get("/analysis")
 async def get_latest_analysis(
-    symbol: str,
+    symbol: str = Query(..., description="Par de trading, ex: BTC/USDT"),
     session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
@@ -52,9 +54,9 @@ async def get_latest_analysis(
     }
 
 
-@router.get("/consensus/{symbol}")
+@router.get("/consensus")
 async def get_consensus(
-    symbol: str,
+    symbol: str = Query(..., description="Par de trading, ex: BTC/USDT"),
     session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
@@ -72,9 +74,9 @@ async def get_consensus(
     }
 
 
-@router.get("/explanation/{symbol}")
+@router.get("/explanation")
 async def get_explanation(
-    symbol: str,
+    symbol: str = Query(..., description="Par de trading, ex: BTC/USDT"),
     session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
@@ -114,9 +116,9 @@ async def get_sentiment(
     }
 
 
-@router.get("/regime/{symbol}")
+@router.get("/regime")
 async def get_regime(
-    symbol: str,
+    symbol: str = Query(..., description="Par de trading, ex: BTC/USDT"),
     session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
@@ -135,12 +137,53 @@ async def get_regime(
 
 @router.get("/heatmap")
 async def get_heatmap(
+    refresh: bool = Query(False, description="Força recálculo ao vivo"),
+    session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
     settings = get_settings()
+    symbols = settings.intelligence_symbols_list
+    max_age = timedelta(minutes=30)
+    now = datetime.now(UTC)
+    cached_assets: list[dict] = []
+    stale_symbols: list[str] = []
+
+    for symbol in symbols:
+        result = await session.execute(
+            select(AssetAnalysisRecord)
+            .where(AssetAnalysisRecord.symbol == symbol)
+            .order_by(AssetAnalysisRecord.created_at.desc())
+            .limit(1)
+        )
+        record = result.scalar_one_or_none()
+        if record and not refresh:
+            created = record.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age = now - created
+            momentum = 0.0
+            if record.indicators and isinstance(record.indicators, dict):
+                momentum = float(record.indicators.get("momentum", 0))
+            if age <= max_age:
+                cached_assets.append({
+                    "symbol": symbol,
+                    "score": record.score,
+                    "trend": record.trend,
+                    "change": momentum,
+                })
+                continue
+        stale_symbols.append(symbol)
+
+    if not stale_symbols and cached_assets:
+        return {"assets": cached_assets, "cached": True}
+
     orchestrator = IntelligenceOrchestrator()
-    heatmap = await orchestrator.get_market_heatmap(settings.intelligence_symbols_list)
-    return {"assets": heatmap}
+    live = await orchestrator.get_market_heatmap(stale_symbols or symbols)
+    by_symbol = {a["symbol"]: a for a in cached_assets}
+    for item in live:
+        by_symbol[item["symbol"]] = item
+    ordered = [by_symbol[s] for s in symbols if s in by_symbol]
+    return {"assets": ordered, "cached": not bool(stale_symbols)}
 
 
 @router.get("/macro")

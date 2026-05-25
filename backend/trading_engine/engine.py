@@ -30,6 +30,7 @@ class OrderRequest:
         stop_loss: Decimal | None = None,
         take_profit: Decimal | None = None,
         trailing_stop_pct: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
         self.exchange = exchange
         self.symbol = symbol
@@ -40,6 +41,7 @@ class OrderRequest:
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         self.trailing_stop_pct = trailing_stop_pct
+        self.metadata = metadata or {}
 
 
 class BaseExecutor(ABC):
@@ -66,7 +68,7 @@ class PaperTradingExecutor(BaseExecutor):
         self._simulated_prices: dict[str, Decimal] = {}
 
     async def place_order(self, request: OrderRequest) -> dict:
-        fill_price = request.price or self._get_simulated_price(request.symbol)
+        fill_price = request.price or await self._fetch_market_price(request.symbol)
         external_id = f"PAPER-{uuid.uuid4().hex[:12]}"
 
         logger.info(
@@ -96,6 +98,17 @@ class PaperTradingExecutor(BaseExecutor):
     def _get_simulated_price(self, symbol: str) -> Decimal:
         defaults = {"BTC/USDT": Decimal("65000"), "ETH/USDT": Decimal("3500"), "SOL/USDT": Decimal("150")}
         return self._simulated_prices.get(symbol, defaults.get(symbol, Decimal("100")))
+
+    async def _fetch_market_price(self, symbol: str) -> Decimal:
+        try:
+            from backend.data_collector.collector import ExchangeConnector
+            ticker = ExchangeConnector("binance").fetch_ticker(symbol)
+            last = ticker.get("last") or ticker.get("close")
+            if last:
+                return Decimal(str(last))
+        except Exception as exc:
+            logger.warning("paper_price_fetch_failed", symbol=symbol, error=str(exc))
+        return self._get_simulated_price(symbol)
 
     def set_simulated_price(self, symbol: str, price: Decimal) -> None:
         self._simulated_prices[symbol] = price
@@ -170,7 +183,20 @@ class TradingEngine:
     ) -> Order:
         """Executa ordem com validação de risco e auditoria."""
         exposure = request.quantity * (request.price or Decimal("1"))
-        can_trade, reason = self.risk_manager.can_open_position(exposure)
+        if self.settings.paper_trading and (request.price is None or request.price <= 0):
+            if isinstance(self.executor, PaperTradingExecutor):
+                request.price = await self.executor._fetch_market_price(request.symbol)
+            exposure = request.quantity * request.price
+        if self.settings.risk_v2_enabled:
+            from backend.app.risk.engine_v2 import RiskEngineV2
+
+            final_score = float(request.metadata.get("final_score", 60))
+            risk_v2 = RiskEngineV2()
+            can_trade, reason = await risk_v2.can_open(session, exposure, final_score)
+            risk_mgr = risk_v2.manager
+        else:
+            can_trade, reason = self.risk_manager.can_open_position(exposure)
+            risk_mgr = self.risk_manager
 
         if not can_trade:
             logger.warning("order_rejected", reason=reason, symbol=request.symbol)
@@ -190,15 +216,15 @@ class TradingEngine:
             return order
 
         if not request.stop_loss:
-            request.stop_loss = self.risk_manager.calculate_stop_loss(
+            request.stop_loss = risk_mgr.calculate_stop_loss(
                 request.price or Decimal("1"), request.side.value
             )
         if not request.take_profit:
-            request.take_profit = self.risk_manager.calculate_take_profit(
+            request.take_profit = risk_mgr.calculate_take_profit(
                 request.price or Decimal("1"), request.side.value
             )
         if not request.trailing_stop_pct:
-            request.trailing_stop_pct = self.risk_manager.config.trailing_stop_pct
+            request.trailing_stop_pct = risk_mgr.config.trailing_stop_pct
 
         result = await self.executor.place_order(request)
 
@@ -245,6 +271,15 @@ class TradingEngine:
         )
 
         logger.info("order_executed", order_id=str(order.id), symbol=request.symbol)
+        if result["status"] == OrderStatus.FILLED.value:
+            from backend.shared.live_events import append_event
+            append_event("trade_event", {
+                "symbol": request.symbol,
+                "side": request.side.value,
+                "quantity": str(request.quantity),
+                "price": str(request.price),
+                "paper": self.settings.paper_trading,
+            })
         return order
 
     async def cancel_order(self, session: AsyncSession, order: Order) -> Order:

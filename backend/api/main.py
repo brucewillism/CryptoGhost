@@ -11,11 +11,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
-from backend.api.routes import ai, auth, dashboard, health, intelligence, investment, quant, risk, trading, v5
-from backend.api.websocket import router as ws_router
+from backend.api.routes import ai, auth, dashboard, health, intelligence, investment, quant, risk, trading, trial, v5, v6_quant
+from backend.api.websocket import router as ws_router, start_realtime_broadcasts, stop_realtime_broadcasts
 from backend.shared.config import get_settings
 from backend.shared.database import Base, async_engine
-from backend.shared import models, models_intelligence, models_quant, models_investment, models_v5  # noqa: F401
+from backend.shared import models, models_intelligence, models_quant, models_investment, models_v5, models_v6  # noqa: F401
 from backend.shared.logging_config import configure_logging, get_logger
 from backend.shared.startup_log import api as api_log, celery_log, database as db_log, ollama as ollama_log, redis_log, startup
 from backend.shared.health_service import check_database, check_ollama, check_redis
@@ -33,9 +33,17 @@ async def lifespan(app: FastAPI):
         sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
 
     if settings.env != "test":
-        async with async_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        db_log("Schema sincronizado")
+        try:
+            async with async_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            db_log("Schema sincronizado")
+        except Exception as exc:
+            db_log(
+                "PostgreSQL indisponível — API sobe em modo degradado",
+                error=str(exc),
+            )
+            if settings.env == "production":
+                raise
 
     db_status = await check_database()
     db_log("PostgreSQL", status=db_status.get("status"), pgvector=db_status.get("pgvector"))
@@ -65,7 +73,10 @@ async def lifespan(app: FastAPI):
         paper_trading=settings.paper_trading,
         live_allowed=settings.is_live_trading_allowed,
     )
+    if settings.env != "test":
+        start_realtime_broadcasts()
     yield
+    await stop_realtime_broadcasts()
     logger.info("cryptoghost_shutdown")
 
 
@@ -92,7 +103,9 @@ app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(intelligence.router, prefix="/api/v1")
 app.include_router(quant.router, prefix="/api/v1")
 app.include_router(investment.router, prefix="/api/v1")
+app.include_router(trial.router, prefix="/api/v1")
 app.include_router(v5.router, prefix="/api/v1")
+app.include_router(v6_quant.router, prefix="/api/v1")
 app.include_router(risk.router, prefix="/api/v1")
 app.include_router(ws_router)
 

@@ -3,10 +3,11 @@ import { api } from '../api';
 
 interface Props {
   onLogin: () => void;
+  sessionMessage?: string;
 }
 
-export function LoginForm({ onLogin }: Props) {
-  const [username, setUsername] = useState('');
+export function LoginForm({ onLogin, sessionMessage }: Props) {
+  const [username, setUsername] = useState('bruce');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,6 +30,7 @@ export function LoginForm({ onLogin }: Props) {
       <form className="login-card" onSubmit={handleSubmit}>
         <h1>👻 CryptoGhost</h1>
         <p>Dashboard de Trading · Acesso Restrito</p>
+        {sessionMessage && <div className="login-info">{sessionMessage}</div>}
         <input
           type="text"
           placeholder="Usuário"

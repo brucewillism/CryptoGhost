@@ -106,18 +106,43 @@ services:
       context: .
       dockerfile: docker/Dockerfile.backend
     container_name: cryptoghost-celery-ai-worker
-    command: celery -A backend.shared.celery_app worker --loglevel=info -Q intelligence -c 2
+    command: celery -A backend.shared.celery_app worker --loglevel=info -Q intelligence,analysis -c 2
     env_file:
       - .env
     environment:
       CRYPTOGHOST_DATABASE_URL: postgresql+asyncpg://cryptoghost:cryptoghost@postgres:5432/cryptoghost
       CRYPTOGHOST_DATABASE_URL_SYNC: postgresql://cryptoghost:cryptoghost@postgres:5432/cryptoghost
       CRYPTOGHOST_REDIS_URL: redis://redis:6379/0
+      CRYPTOGHOST_CELERY_BROKER_URL: redis://redis:6379/1
       CRYPTOGHOST_OLLAMA_BASE_URL: http://ollama:11434
     depends_on:
       - backend
       - redis
       - ollama
+    volumes:
+      - ./backend:/app/backend
+      - cryptoghost_models:/app/models
+    networks:
+      - cryptoghost-net
+    restart: unless-stopped
+
+  celery-worker-v6:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cryptoghost-celery-v6
+    command: celery -A backend.shared.celery_app worker --loglevel=info -Q market_scan,backtesting,retraining -c 2
+    env_file:
+      - .env
+    environment:
+      CRYPTOGHOST_DATABASE_URL: postgresql+asyncpg://cryptoghost:cryptoghost@postgres:5432/cryptoghost
+      CRYPTOGHOST_DATABASE_URL_SYNC: postgresql://cryptoghost:cryptoghost@postgres:5432/cryptoghost
+      CRYPTOGHOST_REDIS_URL: redis://redis:6379/0
+      CRYPTOGHOST_CELERY_BROKER_URL: redis://redis:6379/1
+      CRYPTOGHOST_OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      - backend
+      - redis
     volumes:
       - ./backend:/app/backend
       - cryptoghost_models:/app/models
@@ -137,6 +162,7 @@ services:
       CRYPTOGHOST_CELERY_BROKER_URL: redis://redis:6379/1
     depends_on:
       - celery-worker
+      - celery-worker-v6
     volumes:
       - ./backend:/app/backend
     networks:

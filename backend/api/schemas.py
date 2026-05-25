@@ -92,18 +92,32 @@ class RiskStatusResponse(BaseModel):
 
 class DashboardStats(BaseModel):
     total_pnl: float = 0.0
+    paper_portfolio_value: float = 0.0
+    paper_return_pct: float = 0.0
     open_positions: int = 0
     total_orders: int = 0
     ai_signal: str = "hold"
     ai_confidence: float = 0.0
     risk_status: RiskStatusResponse
     system_status: str = "operational"
+    auto_invest_interval_minutes: int = 30
 
 
 class BacktestRequest(BaseModel):
     symbol: str = "BTC/USDT"
     strategy_name: str = "CryptoGhost-Hybrid"
     initial_capital: Decimal = Decimal("10000")
+
+
+class ApprovedInvestmentRequest(BaseModel):
+    """Ordem de investimento — só executa com confirmação explícita do usuário."""
+
+    user_confirmed: bool = Field(..., description="Deve ser true para executar")
+    symbol: str
+    side: str = "buy"
+    quantity: Decimal
+    stop_loss: Decimal | None = None
+    take_profit: Decimal | None = None
 
 
 class AuditLogResponse(BaseModel):

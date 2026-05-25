@@ -59,6 +59,11 @@ class CryptoGhostSettings(BaseSettings):
     default_stop_loss_pct: float = 1.5
     default_take_profit_pct: float = 3.0
     trailing_stop_pct: float = 0.5
+    paper_portfolio_usdt: float = 10000.0
+    paper_trial_days: int = 30
+    paper_trial_enabled: bool = True
+    auto_invest_enabled: bool = True
+    auto_invest_interval_minutes: int = 30
     circuit_breaker_enabled: bool = True
 
     # Observability
@@ -120,6 +125,21 @@ class CryptoGhostSettings(BaseSettings):
     self_improvement_enabled: bool = True
     drift_retrain_threshold: float = 0.2
     survival_emergency_threshold: float = 25.0
+
+    # Quant v6 feature flags
+    v6_enabled: bool = True
+    consensus_v3_enabled: bool = True
+    auto_invest_v2_enabled: bool = True
+    risk_v2_enabled: bool = True
+    use_redis_cache: bool = True
+    signal_max_age_minutes: int = 60
+    min_consensus_agreement: int = 3
+    min_final_score_buy: float = 60.0
+    min_calibrated_confidence: float = 0.65
+    ml_min_confidence: float = 0.65
+    monte_carlo_simulations: int = 1000
+    feature_schema_version: str = "v6.0"
+    cryptopanic_api_key: str = ""
 
     # Premium data APIs (optional)
     fred_api_key: str = ""

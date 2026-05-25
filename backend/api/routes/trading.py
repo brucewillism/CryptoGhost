@@ -1,14 +1,16 @@
 """CryptoGhost - Rotas de trading."""
 
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.schemas import OrderCreateRequest, OrderResponse, PositionResponse
+from backend.api.schemas import ApprovedInvestmentRequest, OrderCreateRequest, OrderResponse, PositionResponse
+from backend.audit_logs.service import AuditService
 from backend.shared.database import get_async_session
-from backend.shared.models import Order, OrderSide, OrderType, Position
+from backend.shared.models import Order, OrderSide, OrderStatus, OrderType, Position
 from backend.shared.security import UserRole, get_current_user, require_role
 from backend.trading_engine.engine import OrderRequest, TradingEngine
 
@@ -33,6 +35,51 @@ async def create_order(
         take_profit=request.take_profit,
     )
     order = await engine.execute_order(session, order_request, actor=user["username"])
+    return order
+
+
+@router.post("/approve-investment", response_model=OrderResponse)
+async def approve_investment(
+    request: ApprovedInvestmentRequest,
+    session: AsyncSession = Depends(get_async_session),
+    user: dict = Depends(get_current_user),
+) -> Order:
+    """Executa investimento paper/live após confirmação explícita do usuário."""
+    if not request.user_confirmed:
+        raise HTTPException(status_code=400, detail="Confirmação do usuário é obrigatória")
+
+    from backend.data_collector.collector import ExchangeConnector
+
+    connector = ExchangeConnector("binance")
+    ticker = connector.fetch_ticker(request.symbol)
+    market_price = Decimal(str(ticker.get("last") or ticker.get("close")))
+
+    engine = TradingEngine()
+    order_request = OrderRequest(
+        exchange="binance",
+        symbol=request.symbol,
+        side=OrderSide(request.side),
+        quantity=request.quantity,
+        order_type=OrderType.MARKET,
+        price=market_price,
+        stop_loss=request.stop_loss,
+        take_profit=request.take_profit,
+    )
+    order = await engine.execute_order(session, order_request, actor=user["username"])
+    await AuditService.log(
+        session,
+        AuditEventType.FINANCIAL,
+        "investment_approved",
+        actor=user["username"],
+        details={
+            "symbol": request.symbol,
+            "side": request.side,
+            "quantity": str(request.quantity),
+            "price": str(market_price),
+        },
+    )
+    if order.status == OrderStatus.REJECTED.value:
+        raise HTTPException(status_code=400, detail=order.metadata_.get("rejection_reason", "Ordem rejeitada pelo risk manager"))
     return order
 
 

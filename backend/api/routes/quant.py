@@ -150,12 +150,21 @@ async def recent_events(_user: dict = Depends(get_current_user)) -> dict:
 
 
 @router.get("/performance/ranking")
-async def agent_ranking(_user: dict = Depends(get_current_user)) -> dict:
-    lab = AIPerformanceLab()
-    agents = ["analyst", "risk", "sentiment", "regime", "portfolio"]
-    benchmarks = [lab.benchmark_agent(a, [1, 1, 0, 1, 1], [1, 0, 0, 1, 1]) for a in agents]
-    ranked = lab.rank_agents(benchmarks)
-    return {"ranking": [{"agent": b.agent, "accuracy": b.accuracy, "rank": b.rank} for b in ranked]}
+async def agent_ranking(
+    symbol: str = Query("BTC/USDT"),
+    session: AsyncSession = Depends(get_async_session),
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    from backend.app.services.dashboard_metrics import build_neural_activity
+
+    activity = await build_neural_activity(session, symbol)
+    ranked = sorted(activity, key=lambda a: a["activity"], reverse=True)
+    return {
+        "ranking": [
+            {"agent": a["agent"], "accuracy": a["activity"] / 100, "rank": i + 1}
+            for i, a in enumerate(ranked)
+        ],
+    }
 
 
 @router.get("/similarity/{symbol}")
@@ -245,9 +254,10 @@ async def get_event_stream(
     import redis
 
     from backend.event_bus.bus import EventType, STREAM_PREFIX
+    from backend.shared.live_events import recent_events as memory_events
 
-    client = redis.from_url(get_settings().redis_url, decode_responses=True)
-    events = []
+    events: list[dict] = []
+    client = redis.from_url(get_settings().redis_url, decode_responses=True, socket_connect_timeout=2)
     try:
         for et in EventType:
             stream = f"{STREAM_PREFIX}:{et.value}"
@@ -267,16 +277,29 @@ async def get_event_stream(
                     })
             except Exception:
                 continue
+    except Exception:
+        pass
     finally:
         client.close()
 
-    events.sort(key=lambda e: e["id"], reverse=True)
-    return {"events": events[:limit], "total_types": len(EventType)}
+    if not events:
+        events = [
+            {
+                "id": e["id"],
+                "type": e["type"],
+                "event_id": e["event_id"],
+                "payload": e["payload"],
+            }
+            for e in memory_events(limit)
+        ]
+
+    events.sort(key=lambda e: str(e.get("id", "")), reverse=True)
+    return {"events": events[:limit], "total_types": len(EventType), "source": "redis" if len(events) > 0 else "memory"}
 
 
-@router.get("/dashboard/{symbol}")
+@router.get("/dashboard")
 async def quant_dashboard(
-    symbol: str,
+    symbol: str = Query(..., description="Par de trading, ex: BTC/USDT"),
     session: AsyncSession = Depends(get_async_session),
     _user: dict = Depends(get_current_user),
 ) -> dict:
@@ -319,11 +342,63 @@ async def quant_dashboard(
     )
     memories = mem_result.scalars().all()
 
-    lab = AIPerformanceLab()
-    ranking = lab.rank_agents([
-        lab.benchmark_agent(a, [1, 1, 0, 1, 1], [1, 0, 0, 1, 1])
-        for a in ["analyst", "risk", "sentiment", "regime", "portfolio"]
-    ])
+    from backend.app.services.dashboard_metrics import (
+        build_calibration_fallback,
+        build_ensemble_fallback,
+        build_neural_activity,
+        build_similarity_from_trades,
+        build_temporal_from_trades,
+    )
+
+    neural_activity = await build_neural_activity(session, symbol)
+    ranking = sorted(
+        [{"agent": n["agent"], "accuracy": n["activity"] / 100, "rank": i + 1} for i, n in enumerate(
+            sorted(neural_activity, key=lambda x: x["activity"], reverse=True)
+        )],
+        key=lambda x: x["rank"],
+    )
+
+    if not ensemble:
+        ensemble_data = await build_ensemble_fallback(session, symbol)
+    else:
+        ensemble_data = {
+            "final_decision": ensemble.final_decision,
+            "meta_confidence": ensemble.meta_confidence,
+            "stacking_weights": ensemble.stacking_weights,
+            "agent_predictions": ensemble.agent_predictions,
+            "method": ensemble.method,
+        }
+
+    cal_latest = None
+    if calibrations:
+        cal_latest = {
+            "raw_confidence": calibrations[0].raw_confidence,
+            "calibrated_confidence": calibrations[0].calibrated_confidence,
+            "uncertainty": calibrations[0].uncertainty,
+            "reliability_score": calibrations[0].reliability_score,
+        }
+    else:
+        cal_latest = await build_calibration_fallback(session, symbol)
+
+    scenario_list = [
+        {"label": s.scenario_label, "outcome": s.outcome, "state": s.market_state}
+        for s in scenarios
+    ]
+    if not scenario_list:
+        scenario_list = await build_similarity_from_trades(session, symbol)
+
+    memory_entries = [
+        {
+            "agent": m.agent_name,
+            "type": m.memory_type,
+            "decision": m.decision,
+            "context": m.context,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        }
+        for m in memories
+    ]
+    if not memory_entries:
+        memory_entries = await build_temporal_from_trades(session, symbol)
 
     technical: dict = {}
     sentiment = None
@@ -348,26 +423,10 @@ async def quant_dashboard(
                 }
                 for c in calibrations
             ],
-            "latest": {
-                "raw_confidence": calibrations[0].raw_confidence,
-                "calibrated_confidence": calibrations[0].calibrated_confidence,
-                "uncertainty": calibrations[0].uncertainty,
-                "reliability_score": calibrations[0].reliability_score,
-            } if calibrations else None,
+            "latest": cal_latest,
         },
-        "ensemble": {
-            "final_decision": ensemble.final_decision,
-            "meta_confidence": ensemble.meta_confidence,
-            "stacking_weights": ensemble.stacking_weights,
-            "agent_predictions": ensemble.agent_predictions,
-            "method": ensemble.method,
-        } if ensemble else None,
-        "similarity": {
-            "scenarios": [
-                {"label": s.scenario_label, "outcome": s.outcome, "state": s.market_state}
-                for s in scenarios
-            ],
-        },
+        "ensemble": ensemble_data,
+        "similarity": {"scenarios": scenario_list},
         "rl": {
             "policies": [
                 {
@@ -389,30 +448,13 @@ async def quant_dashboard(
                 for d in drift_reports
             ],
         },
-        "temporal_memory": {
-            "entries": [
-                {
-                    "agent": m.agent_name,
-                    "type": m.memory_type,
-                    "decision": m.decision,
-                    "context": m.context,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                }
-                for m in memories
-            ],
-        },
+        "temporal_memory": {"entries": memory_entries},
         "feature_store": {
             "technical_keys": list(technical.keys()) if technical else [],
             "sentiment_available": bool(sentiment),
             "cache_ttl": get_settings().feature_store_ttl,
         },
-        "agent_ranking": [
-            {"agent": b.agent, "accuracy": b.accuracy, "rank": b.rank}
-            for b in ranking
-        ],
-        "neural_activity": [
-            {"agent": b.agent, "activity": round(b.accuracy * 100, 1), "status": "active" if b.accuracy > 0.5 else "degraded"}
-            for b in ranking
-        ],
+        "agent_ranking": ranking,
+        "neural_activity": neural_activity,
     }
 

@@ -77,3 +77,8 @@ SURVIVAL_SCORE_GAUGE = Gauge("cryptoghost_survival_score", "Score de sobrevivên
 SELF_IMPROVEMENT_COUNTER = Counter("cryptoghost_self_improvement_actions_total", "Ações de auto-melhoria")
 ORDERFLOW_ANOMALY = Counter("cryptoghost_orderflow_anomalies_total", "Anomalias orderflow", ["type"])
 STRATEGY_FITNESS = Gauge("cryptoghost_strategy_fitness", "Fitness da estratégia evoluída")
+
+V6_FINAL_SCORE = Gauge("cryptoghost_v6_final_score", "FINAL_SCORE consensus v3", ["symbol"])
+V6_SIGNALS_TOTAL = Counter("cryptoghost_v6_signals_total", "Sinais v6 gerados", ["classification", "can_execute"])
+V6_BACKTEST_RUNS = Counter("cryptoghost_v6_backtest_runs_total", "Backtests v6 executados")
+V6_AUTO_INVEST_BLOCKED = Counter("cryptoghost_v6_auto_invest_blocked_total", "Auto-invest bloqueado", ["reason"])

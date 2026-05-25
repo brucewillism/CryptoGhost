@@ -18,7 +18,7 @@ class MemoryEntry:
     symbol: str
     decision: str
     market_context: dict
-    embedding: list[float]
+    embedding: list[float] | None = None
     outcome: str | None = None
     performance_pct: float | None = None
     was_correct: bool | None = None
@@ -49,6 +49,8 @@ class AIMemoryService:
         return await provider.embed(text)
 
     async def store(self, session: Session, entry: MemoryEntry) -> AIMemoryRecord:
+        from sqlalchemy.ext.asyncio import AsyncSession
+
         context_text = f"{entry.symbol} {entry.decision} {entry.market_context}"
         if not entry.embedding:
             entry.embedding = await self.create_embedding(context_text)
@@ -64,7 +66,10 @@ class AIMemoryService:
             lesson=entry.lesson,
         )
         session.add(record)
-        session.flush()
+        if isinstance(session, AsyncSession):
+            await session.flush()
+        else:
+            session.flush()
         logger.info("memory_stored", symbol=entry.symbol, decision=entry.decision)
         return record
 

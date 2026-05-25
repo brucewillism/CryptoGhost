@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.investment.advisor import build_investment_recommendation
 from backend.investment.pipeline import InvestmentPipeline
 from backend.market_ai_analyst.analyst import MarketAIAnalyst
 from backend.shared.config import get_settings
@@ -19,6 +20,28 @@ from backend.shared.models_investment import (
 from backend.shared.security import get_current_user
 
 router = APIRouter(prefix="/investment", tags=["Investment v4"])
+
+
+@router.get("/recommendation")
+async def investment_recommendation(
+    session: AsyncSession = Depends(get_async_session),
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Melhor ativo para investir agora + proposta de ordem (requer aprovação)."""
+    return await build_investment_recommendation(session)
+
+
+@router.post("/auto-run")
+async def autonomous_invest_cycle(
+    session: AsyncSession = Depends(get_async_session),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """IA autônoma: recomenda, investe paper e aprende — sem aprovação manual."""
+    from backend.investment.auto_invest import run_autonomous_cycle
+
+    result = await run_autonomous_cycle(session, actor=user["username"])
+    await session.commit()
+    return result
 
 
 @router.get("/best-opportunity")
